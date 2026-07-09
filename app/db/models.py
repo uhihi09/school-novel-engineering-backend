@@ -34,7 +34,7 @@ class InequalityReport(Base):
 
 class SimulationLog(Base):
     __tablename__ = "simulation_logs"
-    
+
     SimulationId = Column(String(36), primary_key=True, index=True)
     UserId = Column(String(36), nullable=True, index=True)
     PolicyTitle = Column(String(255), nullable=False)
@@ -43,3 +43,30 @@ class SimulationLog(Base):
     GiniAfter = Column(Float, nullable=False)
     AiResultSummary = Column(String, nullable=True)
     CreatedAt = Column(DateTime, default=_utcnow)
+
+class RegionStat(Base):
+    """Real per-region inequality statistics (F-1), seeded from public data + grounded search."""
+    __tablename__ = "region_stats"
+
+    RegionId = Column(String(64), primary_key=True, index=True)   # e.g. "seoul-gangnam"
+    RegionName = Column(String(100), nullable=False)              # "강남구"
+    CenterLat = Column(Float, nullable=False)
+    CenterLng = Column(Float, nullable=False)
+    AvgIncomeManwon = Column(Float, nullable=True)   # income: 월 평균 소득(만원)
+    DoctorsPer1k = Column(Float, nullable=True)      # healthcare: 인구 1천명당 의사 수
+    Pm25 = Column(Float, nullable=True)              # climate: 연평균 PM2.5 (㎍/㎥)
+    EducationIndex = Column(Float, nullable=True)    # education: 교육 접근/자원 지수 (0~100)
+    Source = Column(String(255), nullable=True)      # data provenance
+    UpdatedAt = Column(DateTime, default=_utcnow)
+
+class PolicyDoc(Base):
+    """Policy/legislation corpus for real vector-search RAG (F-5/F-7)."""
+    __tablename__ = "policy_docs"
+
+    DocId = Column(String(64), primary_key=True, index=True)
+    Title = Column(String(255), nullable=False)
+    Category = Column(String(50), nullable=True)
+    Content = Column(String, nullable=False)
+    Embedding = Column(JSON, nullable=True)          # list[float] embedding vector
+    Source = Column(String(255), nullable=True)
+    UpdatedAt = Column(DateTime, default=_utcnow)

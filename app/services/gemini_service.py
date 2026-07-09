@@ -490,4 +490,37 @@ class GeminiService:
             logger.error(f"Gemini Local News Error: {e}")
             return None
 
+    def research_json(self, prompt: str) -> Optional[Dict[str, Any]]:
+        """Grounded (Google Search) structured query -> parsed JSON dict, or None if unavailable.
+
+        Used by seed scripts to pull REAL public statistics into the DB (computed once, served fast).
+        """
+        if not self.client:
+            return None
+        try:
+            response = self.client.models.generate_content(
+                model=settings.GEMINI_FLASH_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(tools=[types.Tool(google_search=types.GoogleSearch())]),
+            )
+            return self._parse_json(response.text)
+        except Exception as e:
+            logger.error(f"Gemini research_json Error: {e}")
+            return None
+
+    def embed_texts(self, texts: List[str]) -> Optional[List[List[float]]]:
+        """Embed texts with the Gemini embedding model for vector-search RAG. Returns None if unavailable."""
+        if not self.client:
+            return None
+        try:
+            result = self.client.models.embed_content(
+                model=settings.GEMINI_EMBED_MODEL,
+                contents=texts,
+            )
+            return [list(e.values) for e in result.embeddings]
+        except Exception as e:
+            logger.error(f"Gemini embed Error: {e}")
+            return None
+
+
 gemini_service = GeminiService()

@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     GEMINI_FLASH_MODEL: str = "gemini-3.5-flash"
     GEMINI_PRO_MODEL: str = "gemini-2.5-pro"
     GEMINI_TTS_MODEL: str = "gemini-2.5-flash-preview-tts"
+    GEMINI_EMBED_MODEL: str = "gemini-embedding-001"
 
     # Local directory where uploaded citizen-report media is stored and served from /media.
     MEDIA_DIR: str = "media"
