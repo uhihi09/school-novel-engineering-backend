@@ -1,0 +1,52 @@
+# ── Python ──────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# ── Virtual environments ────────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+
+# ── Test / coverage artifacts ───────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.cache/
+
+# ── Secrets & environment ───────────────────────────────────────────────────────
+# Keep .env.example tracked; never commit real secrets.
+.env
+.env.*
+!.env.example
+
+# ── GCP / service-account credentials ───────────────────────────────────────────
+# GOOGLE_APPLICATION_CREDENTIALS JSON keys and similar.
+*-credentials.json
+service-account*.json
+gcp-*.json
+credentials.json
+*.pem
+
+# ── Local databases (SQLite mock data — regenerated on startup) ──────────────────
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# ── Editor / IDE ────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*~
+
+# ── OS ──────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
