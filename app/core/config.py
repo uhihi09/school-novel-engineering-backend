@@ -24,7 +24,7 @@ class Settings(BaseSettings):
 
     # Gemini model ids (centralized so they can be swapped per environment)
     GEMINI_FLASH_MODEL: str = "gemini-3.5-flash"
-    GEMINI_PRO_MODEL: str = "gemini-3.1-pro"
+    GEMINI_PRO_MODEL: str = "gemini-2.5-pro"
 
     # GCP Cloud Storage bucket for uploaded citizen-report media (F-2/F-6)
     GCS_BUCKET: str = "school_hackathon"
