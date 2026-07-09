@@ -1,11 +1,24 @@
+import io
 import json
 import logging
+import wave
 from typing import Dict, Any, List, Optional
 from google import genai
 from google.genai import types
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _pcm_to_wav(pcm_bytes: bytes, sample_rate: int = 24000, channels: int = 1, sampwidth: int = 2) -> bytes:
+    """Wrap raw PCM (Gemini TTS returns 16-bit LE PCM @ 24 kHz) in a WAV container so browsers play it."""
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(channels)
+        wf.setsampwidth(sampwidth)
+        wf.setframerate(sample_rate)
+        wf.writeframes(pcm_bytes)
+    return buf.getvalue()
 
 class GeminiService:
     def __init__(self):
@@ -290,16 +303,29 @@ class GeminiService:
             logger.error(f"Gemini Simulation Error: {e}")
             return self._get_mock_fallback("agent_simulation", {"persona": persona, "policy": policy_title})
 
-    def audit_legislation(self, policy_title: str) -> Dict[str, Any]:
-        """F-7: Audits a proposed legislation policy draft for blind spots and vulnerable loops."""
+    def audit_legislation(self, policy_title: str, docs: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+        """F-7: Audits a proposed legislation policy draft for blind spots and vulnerable loops.
+
+        When `docs` (RAG-retrieved related legislation) are supplied, their full text is injected as
+        grounding context so the audit cross-references real enacted precedents.
+        """
         if not self.client:
             return self._get_mock_fallback("legislative_audit", {})
 
+        context_block = "\n\n".join(
+            f"[{d.get('title', '')}] {d.get('content', '')}" for d in (docs or [])
+        ) or "(관련 법령 문서 없음)"
         prompt = f"""
-        Perform a thorough legislative auditing on the proposed public policy: "{policy_title}".
-        Identify potential legal blind spots, vulnerable socio-economic groups that might be accidentally 
+        Perform a thorough legislative audit on the proposed public policy: "{policy_title}".
+        Cross-reference the following related enacted-legislation excerpts as grounding context to spot
+        precedents and blind spots:
+
+        Reference legislation:
+        {context_block}
+
+        Identify potential legal blind spots, vulnerable socio-economic groups that might be accidentally
         excluded or adversely affected (unintended negative externalities), and recommend concrete amendments.
-        
+
         Return exactly a JSON object with this structure:
         {{
           "loopholes": ["bullet points in Korean"],
@@ -353,40 +379,115 @@ class GeminiService:
             return self._get_mock_fallback("advisor_answer", {"question": question, "docs": docs})
 
     def analyze_satellite_imagery(
-        self, region_name: str, seed: int, image_bytes: Optional[bytes] = None
+        self, region_name: str, lat: float, lng: float, image_bytes: Optional[bytes] = None
     ) -> Dict[str, Any]:
-        """F-4: Reads satellite imagery (or metadata) into a structured Satellite Poverty Index report."""
+        """F-4: Produce a Satellite Poverty Index report.
+
+        - If a real satellite tile (`image_bytes`) is supplied, Gemini Vision reads it directly.
+        - Otherwise the assessment is grounded in REAL web data via Google Search (no fabricated seed).
+        """
+        seed = int(abs(lat) * 1000 + abs(lng) * 1000) % 100
         if not self.client:
             return self._get_mock_fallback("satellite_spi", {"seed": seed})
 
-        prompt = f"""
-        Analyze satellite imagery of "{region_name}" for physical housing/poverty inequality.
-        Assess green-space access, slum-expansion trend, road paving ratio, and night-light intensity,
-        then assign an overall poverty grade.
-
-        Return exactly a JSON object:
-        {{
-          "poverty_grade": "string (e.g. 'C (취약)')",
-          "green_access_score": float,
-          "slum_trend": "string",
-          "road_paving_ratio": float,
-          "night_light_intensity": float,
-          "reasoning": "string (in Korean)"
-        }}
-        """
         try:
-            contents = [prompt]
             if image_bytes:
-                # Real path: a fetched Earth Engine / GCS satellite tile is judged by Gemini Vision.
-                contents = [types.Part.from_bytes(data=image_bytes, mime_type="image/png"), prompt]
+                vision_prompt = """
+                Analyze this satellite image for physical housing/poverty inequality: green-space access,
+                slum/aging-housing trend, road paving ratio, night-light intensity, overall poverty grade.
+                Return ONLY a JSON object with keys poverty_grade, green_access_score, slum_trend,
+                road_paving_ratio, night_light_intensity, reasoning (Korean).
+                """
+                response = self.client.models.generate_content(
+                    model=settings.GEMINI_PRO_MODEL,
+                    contents=[types.Part.from_bytes(data=image_bytes, mime_type="image/png"), vision_prompt],
+                    config=types.GenerateContentConfig(response_mime_type="application/json"),
+                )
+                return self._parse_json(response.text)
+
+            # No satellite tile: ground the assessment in real current web sources.
+            prompt = f"""
+            Research the real physical/housing inequality conditions of "{region_name}"
+            (approximately latitude {lat}, longitude {lng}). Using current web sources, assess:
+            green-space access, slum / aging-housing trend, road paving ratio, night-light intensity,
+            and assign an overall poverty grade for THIS specific area.
+
+            Return ONLY a JSON object:
+            {{
+              "poverty_grade": "e.g. 'C (취약)'",
+              "green_access_score": float,
+              "slum_trend": "string (Korean)",
+              "road_paving_ratio": float,
+              "night_light_intensity": float,
+              "reasoning": "Korean; briefly cite what you found"
+            }}
+            """
             response = self.client.models.generate_content(
                 model=settings.GEMINI_PRO_MODEL,
-                contents=contents,
-                config=types.GenerateContentConfig(response_mime_type="application/json"),
+                contents=prompt,
+                config=types.GenerateContentConfig(tools=[types.Tool(google_search=types.GoogleSearch())]),
             )
             return self._parse_json(response.text)
         except Exception as e:
             logger.error(f"Gemini Satellite SPI Error: {e}")
             return self._get_mock_fallback("satellite_spi", {"seed": seed})
+
+    def synthesize_speech_audio(self, text: str, voice_name: str = "Kore") -> Optional[bytes]:
+        """F-6: Real text-to-speech via Gemini TTS. Returns WAV bytes, or None if unavailable."""
+        if not self.client:
+            return None
+        try:
+            response = self.client.models.generate_content(
+                model=settings.GEMINI_TTS_MODEL,
+                contents=text,
+                config=types.GenerateContentConfig(
+                    response_modalities=["AUDIO"],
+                    speech_config=types.SpeechConfig(
+                        voice_config=types.VoiceConfig(
+                            prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice_name)
+                        )
+                    ),
+                ),
+            )
+            part = response.candidates[0].content.parts[0]
+            return _pcm_to_wav(part.inline_data.data)
+        except Exception as e:
+            logger.error(f"Gemini TTS Error: {e}")
+            return None
+
+    def fetch_local_news(self, ne_lat: float, ne_lng: float, sw_lat: float, sw_lng: float, limit: int = 4):
+        """F-2: Fetch REAL recent local inequality news inside the bbox via Google Search grounding.
+
+        Returns a list of pin dicts, or None if unavailable (caller then falls back).
+        """
+        if not self.client:
+            return None
+        center_lat = (ne_lat + sw_lat) / 2
+        center_lng = (ne_lng + sw_lng) / 2
+        prompt = f"""
+        A map view is centered near latitude {center_lat}, longitude {center_lng}
+        (bounding box NE {ne_lat},{ne_lng} / SW {sw_lat},{sw_lng}).
+        First identify which real administrative region this covers, then search the web for {limit}
+        RECENT, REAL news items about local inequality there (transport / housing / labor / healthcare /
+        education / climate access gaps). Summarize each in Korean and place each pin's latitude/longitude
+        INSIDE the bounding box near the most relevant spot.
+
+        Return ONLY a JSON object:
+        {{"pins": [{{"headline": "Korean", "category": "income|healthcare|climate|education",
+          "sentiment_score": float, "summary": "Korean", "severity": "Low|Medium|High",
+          "latitude": float, "longitude": float}}]}}
+        """
+        try:
+            response = self.client.models.generate_content(
+                model=settings.GEMINI_FLASH_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(tools=[types.Tool(google_search=types.GoogleSearch())]),
+            )
+            data = self._parse_json(response.text)
+            pins = data.get("pins") if isinstance(data, dict) else None
+            return pins or None
+        except Exception as e:
+            logger.error(f"Gemini Local News Error: {e}")
+            return None
 
 gemini_service = GeminiService()

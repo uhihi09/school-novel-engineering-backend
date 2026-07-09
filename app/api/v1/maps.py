@@ -37,10 +37,43 @@ def read_news_pins(
     sw_lat: float = Query(..., description="South-West Latitude"),
     sw_lng: float = Query(..., description="South-West Longitude")
 ):
-    """F-2: Real-time inequality news sensor. Scrapes and maps real-time articles as coordinate pins."""
+    """F-2: Real-time inequality news sensor — real local news via Gemini + Google Search grounding,
+    with a static fallback if grounding is unavailable."""
+    bounding_box = {"ne_lat": ne_lat, "ne_lng": ne_lng, "sw_lat": sw_lat, "sw_lng": sw_lng}
+
+    # 1) Try REAL news grounded in live web search.
+    real = gemini_service.fetch_local_news(ne_lat, ne_lng, sw_lat, sw_lng, limit=4)
+    if real:
+        lo_lat, hi_lat = min(sw_lat, ne_lat), max(sw_lat, ne_lat)
+        lo_lng, hi_lng = min(sw_lng, ne_lng), max(sw_lng, ne_lng)
+        mid_lat, mid_lng = (lo_lat + hi_lat) / 2, (lo_lng + hi_lng) / 2
+        pins = []
+        for idx, n in enumerate(real):
+            try:
+                score = float(n.get("sentiment_score", -0.5))
+            except (ValueError, TypeError):
+                score = -0.5
+            try:
+                lat = min(hi_lat, max(lo_lat, float(n.get("latitude", mid_lat))))
+                lng = min(hi_lng, max(lo_lng, float(n.get("longitude", mid_lng))))
+            except (ValueError, TypeError):
+                lat, lng = mid_lat, mid_lng
+            pins.append({
+                "pin_id": f"pin_news_{idx + 100}",
+                "headline": n.get("headline", ""),
+                "category": n.get("category", "income"),
+                "sentiment_score": score,
+                "summary": n.get("summary", ""),
+                "severity": n.get("severity", "Medium"),
+                "latitude": round(lat, 6),
+                "longitude": round(lng, 6),
+            })
+        return {"bounding_box": bounding_box, "pins": pins, "source": "live-search"}
+
+    # 2) Fallback: static scenarios still analyzed by Gemini sentiment.
     pins = []
-    
-    # Generate 4 distinct mock local news pins within the bounding box
+
+    # Generate 4 distinct fallback local news pins within the bounding box
     news_scenarios = [
         {
             "headline": "A구 중앙의원, 응급실 야간 전문의 확보 실패로 격주 휴업 결정... 환자 장거리 이동 불가피",
@@ -90,12 +123,4 @@ def read_news_pins(
             "longitude": round(lng, 6)
         })
         
-    return {
-        "bounding_box": {
-            "ne_lat": ne_lat,
-            "ne_lng": ne_lng,
-            "sw_lat": sw_lat,
-            "sw_lng": sw_lng
-        },
-        "pins": pins
-    }
+    return {"bounding_box": bounding_box, "pins": pins, "source": "static"}

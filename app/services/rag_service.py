@@ -45,8 +45,9 @@ class RAGService:
         # Step 1: Query knowledge base
         relevant_policies = self.search_policies(policy_title)
 
-        # Step 2: Use Gemini service to perform legislative audit
-        audit_results = gemini_service.audit_legislation(policy_title)
+        # Step 2: Use Gemini service to perform legislative audit, injecting the retrieved
+        # legislation docs as grounding context (real RAG).
+        audit_results = gemini_service.audit_legislation(policy_title, docs=relevant_policies)
 
         # Merge RAG references
         audit_results["references_consulted"] = [p["title"] for p in relevant_policies]

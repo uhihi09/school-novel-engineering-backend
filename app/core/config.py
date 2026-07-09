@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     # Gemini model ids (centralized so they can be swapped per environment)
     GEMINI_FLASH_MODEL: str = "gemini-3.5-flash"
     GEMINI_PRO_MODEL: str = "gemini-2.5-pro"
+    GEMINI_TTS_MODEL: str = "gemini-2.5-flash-preview-tts"
+
+    # Local directory where uploaded citizen-report media is stored and served from /media.
+    MEDIA_DIR: str = "media"
 
     # GCP Cloud Storage bucket for uploaded citizen-report media (F-2/F-6)
     GCS_BUCKET: str = "school_hackathon"

@@ -128,15 +128,17 @@ class SimulatorService:
         gini_after = self._calculate_gini(incomes_after)
         disparity_delta_percent = round(((gini_after - gini_before) / gini_before) * 100, 2)
         
-        # Generate summary of winners/losers
-        winners = []
-        losers = []
-        if disparity_delta_percent < 0:
-            winners = ["unemployed_youth", "low_income_students", "vulnerable_families"]
-            losers = ["high_asset_property_owners"]
-        else:
-            winners = ["high_income_brackets"]
-            losers = ["low_wage_workers", "small_business_owners"]
+        # Derive winners/losers from the ACTUAL per-bracket income change (no hardcoding).
+        _LABELS = {"low": "저소득층", "middle": "중산층", "high": "고소득층"}
+        bracket_delta: Dict[str, float] = {}
+        bracket_count: Dict[str, int] = {}
+        for p, before, after in zip(self.personas, incomes_before, incomes_after):
+            b = p["bracket"]
+            bracket_delta[b] = bracket_delta.get(b, 0.0) + (after - before)
+            bracket_count[b] = bracket_count.get(b, 0) + 1
+        avg_delta = {b: bracket_delta[b] / bracket_count[b] for b in bracket_delta}
+        winners = [_LABELS.get(b, b) for b, d in sorted(avg_delta.items(), key=lambda kv: -kv[1]) if d > 1.0]
+        losers = [_LABELS.get(b, b) for b, d in sorted(avg_delta.items(), key=lambda kv: kv[1]) if d < -1.0]
             
         # Compile final narrative report via Gemini
         loopholes = gemini_service.audit_legislation(title).get("loopholes") or []

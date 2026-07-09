@@ -13,6 +13,7 @@ os.environ["DATABASE_URL"] = "sqlite://"
 os.environ["GEMINI_API_KEY"] = ""
 os.environ["USE_VERTEX_AI"] = "false"
 os.environ["GCP_PROJECT_ID"] = ""
+os.environ["MEDIA_DIR"] = str(Path(__file__).resolve().parent.parent / ".test_media")
 
 import pytest
 from fastapi.testclient import TestClient

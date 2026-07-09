@@ -1,5 +1,6 @@
 import uuid
-from fastapi import APIRouter, Depends, Form, UploadFile, File, Query, HTTPException, status
+from pathlib import Path
+from fastapi import APIRouter, Depends, Form, UploadFile, File, Query, HTTPException, Request, status
 from sqlalchemy.orm import Session
 from typing import Optional
 from app.api.deps import get_db, get_current_user_id
@@ -29,6 +30,7 @@ def _serialize_report(report: InequalityReport) -> dict:
 
 @router.post("/report", status_code=status.HTTP_201_CREATED)
 async def create_crowdsource_report(
+    request: Request,
     category: str = Form(..., description="Inequality category (transport/housing/labor/healthcare)"),
     raw_title: str = Form(..., description="User-input report title"),
     description: str = Form(..., description="User-input description of the barrier/inequality"),
@@ -54,15 +56,19 @@ async def create_crowdsource_report(
         media_bytes = await media.read()
         # Guard against a missing/empty upload filename (Starlette allows filename=None)
         filename = media.filename or ""
-        file_ext = filename.rsplit(".", 1)[-1] if "." in filename else "jpg"
-        
+        file_ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "jpg"
+
         # Call Gemini multimodal verification
         img_check = gemini_service.validate_crowdsource_image(media_bytes, file_ext)
         is_valid = img_check.get("is_valid", True)
         ai_trust_score = img_check.get("ai_trust_score", 90.0)
-        
-        # Save media_url simulation (storing locally or pointing to mock GCS buckets)
-        media_url = f"https://storage.googleapis.com/{settings.GCS_BUCKET}/{report_id}.{file_ext}"
+
+        # Persist the file to the media directory and expose a real, servable URL (/media/...).
+        media_dir = Path(settings.MEDIA_DIR)
+        media_dir.mkdir(parents=True, exist_ok=True)
+        stored_name = f"{report_id}.{file_ext}"
+        (media_dir / stored_name).write_bytes(media_bytes)
+        media_url = f"{str(request.base_url).rstrip('/')}/media/{stored_name}"
     
     # 3. Create ORM record and commit to Database
     report = InequalityReport(

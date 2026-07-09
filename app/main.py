@@ -1,7 +1,9 @@
 import logging
+from pathlib import Path
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from app.core.config import settings
 from app.db.session import engine, Base
 from app.api.v1.auth import router as auth_router
@@ -51,6 +53,11 @@ app.include_router(maps_router, prefix=f"{settings.API_V1_STR}/maps", tags=["Map
 app.include_router(simulator_router, prefix=f"{settings.API_V1_STR}/simulator", tags=["Policy Simulator & RAG"])
 app.include_router(crowdsourcing_router, prefix=f"{settings.API_V1_STR}/crowdsourcing", tags=["Crowdsourcing Report"])
 app.include_router(advisor_router, prefix=f"{settings.API_V1_STR}/advisor", tags=["AI Policy Advisor"])
+
+# Serve uploaded citizen-report media files (real storage for F-2/F-6).
+_media_dir = Path(settings.MEDIA_DIR)
+_media_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/media", StaticFiles(directory=str(_media_dir)), name="media")
 
 @app.get("/")
 def read_root():

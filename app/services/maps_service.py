@@ -99,9 +99,7 @@ class MapsService:
         endpoint stays demoable. A real Earth Engine / GCS tile can be passed through to the vision
         model via gemini_service.analyze_satellite_imagery(image_bytes=...).
         """
-        # Stable per-coordinate seed keeps the mock report reproducible for a given location.
-        seed = int((abs(lat) * 1000 + abs(lng) * 1000)) % 100
-        report = gemini_service.analyze_satellite_imagery(region_name=region_name, seed=seed)
+        report = gemini_service.analyze_satellite_imagery(region_name=region_name, lat=lat, lng=lng)
         return {
             "region_name": region_name,
             "latitude": round(lat, 6),

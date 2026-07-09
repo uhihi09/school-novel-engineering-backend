@@ -50,3 +50,7 @@ credentials.json
 # ── OS ──────────────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
+
+# Uploaded citizen-report media (served from /media)
+media/
+.test_media/

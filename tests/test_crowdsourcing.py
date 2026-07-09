@@ -48,5 +48,5 @@ def test_create_crowdsource_report_with_image(client):
     assert "report_id" in data
     assert data["is_valid"] is True
     assert data["ai_trust_score"] > 0.0
-    assert data["media_url"].startswith("https://storage.googleapis.com")
+    assert "/media/" in data["media_url"]
     assert ".png" in data["media_url"]
