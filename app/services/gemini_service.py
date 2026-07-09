@@ -117,6 +117,64 @@ class GeminiService:
             }
         return {}
 
+    @staticmethod
+    def _parse_json(text: str) -> Dict[str, Any]:
+        """Parse a JSON object from an LLM response, tolerating markdown fences, surrounding
+        prose, and truncated output (Gemini occasionally omits the closing brace). Repairs an
+        unterminated string and unbalanced braces/brackets before a final parse attempt."""
+        if not text:
+            raise ValueError("empty response")
+        s = text.strip()
+        # Strip ``` / ```json code fences if present.
+        if s.startswith("```"):
+            s = s[3:]
+            if s[:4].lower() == "json":
+                s = s[4:]
+            if s.endswith("```"):
+                s = s[:-3]
+            s = s.strip()
+        try:
+            return json.loads(s)
+        except json.JSONDecodeError:
+            pass
+        # Narrow to the first JSON object and balance any unclosed string/brackets.
+        start = s.find("{")
+        if start == -1:
+            raise json.JSONDecodeError("no JSON object found", s, 0)
+        s = s[start:]
+        in_str = False
+        escaped = False
+        closers = []
+        end_idx = None
+        for i, ch in enumerate(s):
+            if escaped:
+                escaped = False
+                continue
+            if ch == "\\":
+                escaped = True
+                continue
+            if in_str:
+                if ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch == "{":
+                closers.append("}")
+            elif ch == "[":
+                closers.append("]")
+            elif ch in "}]":
+                if closers:
+                    closers.pop()
+                if not closers:  # first top-level object/array closed -> drop trailing prose
+                    end_idx = i
+                    break
+        if end_idx is not None:
+            return json.loads(s[:end_idx + 1])
+        # Truncated output: close any open string and unbalanced brackets, then parse.
+        repaired = s + ('"' if in_str else "") + "".join(reversed(closers))
+        return json.loads(repaired)
+
     def analyze_news_sentiment(self, news_text: str) -> Dict[str, Any]:
         """F-2: Analyzes real-time news for inequality category, sentiment, and severity."""
         if not self.client:
@@ -140,7 +198,7 @@ class GeminiService:
                 contents=prompt,
                 config=types.GenerateContentConfig(response_mime_type="application/json")
             )
-            return json.loads(response.text)
+            return self._parse_json(response.text)
         except Exception as e:
             logger.error(f"Gemini API Error in analyze_news_sentiment: {e}")
             return self._get_mock_fallback("news_sentiment", {"text": news_text})
@@ -195,7 +253,7 @@ class GeminiService:
                 ],
                 config=types.GenerateContentConfig(response_mime_type="application/json")
             )
-            return json.loads(response.text)
+            return self._parse_json(response.text)
         except Exception as e:
             logger.error(f"Gemini API Multimodal Error: {e}")
             return self._get_mock_fallback("multimodal_verify", {})
@@ -227,7 +285,7 @@ class GeminiService:
                 contents=prompt,
                 config=types.GenerateContentConfig(response_mime_type="application/json")
             )
-            return json.loads(response.text)
+            return self._parse_json(response.text)
         except Exception as e:
             logger.error(f"Gemini Simulation Error: {e}")
             return self._get_mock_fallback("agent_simulation", {"persona": persona, "policy": policy_title})
@@ -255,7 +313,7 @@ class GeminiService:
                 contents=prompt,
                 config=types.GenerateContentConfig(response_mime_type="application/json")
             )
-            return json.loads(response.text)
+            return self._parse_json(response.text)
         except Exception as e:
             logger.error(f"Gemini Audit Error: {e}")
             return self._get_mock_fallback("legislative_audit", {})
@@ -289,7 +347,7 @@ class GeminiService:
                 contents=prompt,
                 config=types.GenerateContentConfig(response_mime_type="application/json"),
             )
-            return json.loads(response.text)
+            return self._parse_json(response.text)
         except Exception as e:
             logger.error(f"Gemini Advisor Error: {e}")
             return self._get_mock_fallback("advisor_answer", {"question": question, "docs": docs})
@@ -326,7 +384,7 @@ class GeminiService:
                 contents=contents,
                 config=types.GenerateContentConfig(response_mime_type="application/json"),
             )
-            return json.loads(response.text)
+            return self._parse_json(response.text)
         except Exception as e:
             logger.error(f"Gemini Satellite SPI Error: {e}")
             return self._get_mock_fallback("satellite_spi", {"seed": seed})
