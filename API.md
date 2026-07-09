@@ -96,6 +96,36 @@ Authorization: Bearer <access_token>
 
 > 렌더 팁: `index_value`로 색상/높이(extrusion)를 매핑. `data_source==="synthetic-fallback"`이면 그 지역은 아직 실데이터 미시딩(현재 전국 시군구 시딩 완료).
 
+### `GET /api/v1/maps/regions` (F-1) — 실제 시군구 경계 코로플레스 ⭐권장
+`/grid`의 인공 5×5 격자 대신, **실제 행정구역 경계 폴리곤**을 실데이터 색으로 반환. 화면에 걸치는 시군구만 반환.
+
+**쿼리**: `ne_lat`,`ne_lng`,`sw_lat`,`sw_lng`(필수), `dimension`(income/healthcare/climate/education, 기본 income)
+
+```jsonc
+{
+  "type": "FeatureCollection",
+  "dimension": "education",
+  "data_source": "real-region-boundaries",
+  "region_count": 47,
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": { "type": "MultiPolygon", "coordinates": [[[[126.98,37.57], ...]]] },  // 실제 경계
+      "properties": {
+        "region_id": "kr-11010",
+        "region": "서울특별시 종로구",
+        "index_value": 68.3,          // 0~100, 전국 정규화 (지역마다 다름)
+        "grade": "B (양호)",
+        "education_index": 82.0        // dimension별 추가 필드 (grid와 동일)
+      }
+    }
+  ]
+}
+```
+- `index_value`는 **전국 기준 정규화**라 어느 뷰에서든 같은 지역은 같은 색.
+- Google Maps `data.addGeoJson()` / Mapbox `fill-extrusion`에 그대로. 응답 ~100~150KB(광역 뷰 기준).
+- 확대해도 화면에 걸친 시군구가 반환됩니다(빈 화면 없음). **지도 채색은 이 엔드포인트 사용을 권장**하고, `/grid`는 격자형 데모용으로 유지.
+
 ### `GET /api/v1/maps/news` (F-2) — 실시간 불평등 뉴스 핀 ⏱️느림
 ```jsonc
 // 쿼리: ne_lat, ne_lng, sw_lat, sw_lng (필수)
@@ -280,6 +310,7 @@ const report = await fetch(`${BASE}/api/v1/crowdsourcing/report`, { method: "POS
 | POST | `/api/v1/auth/register` | — | 빠름 |
 | POST | `/api/v1/auth/login` | — | 빠름 |
 | GET | `/api/v1/auth/me` | 필수 | 빠름 |
+| GET | `/api/v1/maps/regions` ⭐ | 선택 | 빠름 |
 | GET | `/api/v1/maps/grid` | 선택 | 빠름 |
 | GET | `/api/v1/maps/news` | 선택 | ⏱️느림 |
 | GET | `/api/v1/maps/spi` | 선택 | ⏱️느림 |
