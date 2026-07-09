@@ -21,6 +21,24 @@ def read_grid(
         db, ne_lat=ne_lat, ne_lng=ne_lng, sw_lat=sw_lat, sw_lng=sw_lng, zoom=zoom, dimension=dimension
     )
 
+
+@router.get("/regions")
+def read_region_choropleth(
+    ne_lat: float = Query(..., description="North-East Latitude"),
+    ne_lng: float = Query(..., description="North-East Longitude"),
+    sw_lat: float = Query(..., description="South-West Latitude"),
+    sw_lng: float = Query(..., description="South-West Longitude"),
+    dimension: str = Query("income", description="Inequality dimension (income/healthcare/climate/education)"),
+    db: Session = Depends(get_db),
+):
+    """F-1: Real 시군구 boundary polygons within the viewport, coloured by real per-region stats.
+
+    Preferred over /grid — returns true administrative shapes (GeoJSON) instead of a synthetic 5x5 grid.
+    """
+    return maps_service.get_region_choropleth(
+        db, ne_lat=ne_lat, ne_lng=ne_lng, sw_lat=sw_lat, sw_lng=sw_lng, dimension=dimension
+    )
+
 @router.get("/spi")
 def read_satellite_poverty_index(
     lat: float = Query(..., description="Target latitude"),

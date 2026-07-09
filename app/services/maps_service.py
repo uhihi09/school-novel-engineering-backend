@@ -1,7 +1,7 @@
 import numpy as np
 from typing import Dict, Any, Tuple
 from sqlalchemy.orm import Session
-from app.db.models import RegionStat
+from app.db.models import RegionStat, RegionBoundary
 from app.repositories.report_repository import report_repository
 from app.services.gemini_service import gemini_service
 
@@ -123,6 +123,84 @@ class MapsService:
             "type": "FeatureCollection",
             "dimension": dimension,
             "data_source": data_source,
+            "features": features,
+        }
+
+    @staticmethod
+    def _index_and_extra(dimension: str, raw: float, norm: float) -> Tuple[float, Dict[str, Any]]:
+        """Map a region's raw metric + nationwide-normalized score to an index_value + extra property."""
+        if dimension == "climate":
+            return round(max(5.0, 100.0 - norm), 1), {"pm25_micrograms": round(raw, 1)}
+        if dimension == "income":
+            return round(max(5.0, norm), 1), {"average_income": int(raw * 10000)}
+        if dimension == "healthcare":
+            return round(max(5.0, norm), 1), {"doctor_count_per_10k": round(raw * 10, 2)}
+        return round(max(5.0, norm), 1), {"education_index": round(raw, 1)}
+
+    def get_region_choropleth(
+        self, db: Session, *, ne_lat: float, ne_lng: float, sw_lat: float, sw_lng: float, dimension: str
+    ) -> Dict[str, Any]:
+        """F-1: Real administrative-boundary choropleth. Returns GeoJSON polygons of the actual
+        시군구 visible in the bounding box, coloured by real per-region stats (nationwide-normalized).
+        Replaces the synthetic 5x5 grid with true region shapes."""
+        all_regions = db.query(RegionStat).all()
+        vals = [self._metric(r, dimension) for r in all_regions if self._metric(r, dimension) is not None]
+        if not vals:
+            return {"type": "FeatureCollection", "dimension": dimension,
+                    "data_source": "unseeded", "region_count": 0, "features": []}
+        lo, hi = min(vals), max(vals)
+        span = (hi - lo) or 1.0
+
+        lo_lat, hi_lat = min(sw_lat, ne_lat), max(sw_lat, ne_lat)
+        lo_lng, hi_lng = min(sw_lng, ne_lng), max(sw_lng, ne_lng)
+
+        # Regions whose bounding box overlaps the requested viewport.
+        pairs = (
+            db.query(RegionStat, RegionBoundary)
+            .join(RegionBoundary, RegionStat.RegionId == RegionBoundary.RegionId)
+            .filter(
+                RegionBoundary.MaxLat >= lo_lat, RegionBoundary.MinLat <= hi_lat,
+                RegionBoundary.MaxLng >= lo_lng, RegionBoundary.MinLng <= hi_lng,
+            )
+            .all()
+        )
+        reports = report_repository.get_by_bounds(
+            db, ne_lat=hi_lat, ne_lng=hi_lng, sw_lat=lo_lat, sw_lng=lo_lng
+        )
+
+        features = []
+        for stat, bound in pairs:
+            raw = self._metric(stat, dimension)
+            if raw is None:
+                continue
+            norm = 100.0 * (raw - lo) / span
+            index_val, extra = self._index_and_extra(dimension, raw, norm)
+            grade = self._grade(index_val)
+            rc = sum(
+                1 for r in reports
+                if r.IsValid and bound.MinLat <= r.Latitude <= bound.MaxLat
+                and bound.MinLng <= r.Longitude <= bound.MaxLng
+            )
+            if rc:
+                index_val = round(max(5.0, index_val - rc * 8.5), 1)
+                grade = f"{grade} · 제보 {rc}건 반영"
+            features.append({
+                "type": "Feature",
+                "geometry": bound.Boundary,
+                "properties": {
+                    "region_id": stat.RegionId,
+                    "region": stat.RegionName,
+                    "index_value": index_val,
+                    "grade": grade,
+                    **extra,
+                },
+            })
+
+        return {
+            "type": "FeatureCollection",
+            "dimension": dimension,
+            "data_source": "real-region-boundaries",
+            "region_count": len(features),
             "features": features,
         }
 

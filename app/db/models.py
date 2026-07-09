@@ -59,6 +59,17 @@ class RegionStat(Base):
     Source = Column(String(255), nullable=True)      # data provenance
     UpdatedAt = Column(DateTime, default=_utcnow)
 
+class RegionBoundary(Base):
+    """Real administrative boundary polygons (F-1 choropleth), keyed to region_stats by RegionId."""
+    __tablename__ = "region_boundaries"
+
+    RegionId = Column(String(64), primary_key=True, index=True)  # matches RegionStat.RegionId
+    Boundary = Column(JSON, nullable=False)   # GeoJSON geometry (MultiPolygon/Polygon), simplified
+    MinLat = Column(Float, nullable=True)
+    MaxLat = Column(Float, nullable=True)
+    MinLng = Column(Float, nullable=True)
+    MaxLng = Column(Float, nullable=True)
+
 class PolicyDoc(Base):
     """Policy/legislation corpus for real vector-search RAG (F-5/F-7)."""
     __tablename__ = "policy_docs"
