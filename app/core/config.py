@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     GEMINI_TTS_MODEL: str = "gemini-2.5-flash-preview-tts"
     GEMINI_EMBED_MODEL: str = "gemini-embedding-001"
 
+    # Background inequality-news collector (F-2). Disabled by default so local dev and
+    # tests never burn grounding quota; enable via env var on the deployment VM only.
+    NEWS_COLLECTOR_ENABLED: bool = False
+    NEWS_COLLECT_INTERVAL_MINUTES: int = 15
+
     # Local directory where uploaded citizen-report media is stored and served from /media.
     MEDIA_DIR: str = "media"
 

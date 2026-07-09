@@ -14,6 +14,7 @@ os.environ["GEMINI_API_KEY"] = ""
 os.environ["USE_VERTEX_AI"] = "false"
 os.environ["GCP_PROJECT_ID"] = ""
 os.environ["MEDIA_DIR"] = str(Path(__file__).resolve().parent.parent / ".test_media")
+os.environ["NEWS_COLLECTOR_ENABLED"] = "false"  # never run the background collector in tests
 
 import pytest
 from fastapi.testclient import TestClient

@@ -1,6 +1,7 @@
+import asyncio
 import logging
 from pathlib import Path
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -24,7 +25,20 @@ async def lifespan(app: FastAPI):
         Base.metadata.create_all(bind=engine)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Startup DB init skipped (database unreachable?): %s", exc)
+
+    # Background inequality-news collector (F-2): opt-in via NEWS_COLLECTOR_ENABLED so
+    # local dev and tests never burn Gemini grounding quota.
+    collector_task = None
+    if settings.NEWS_COLLECTOR_ENABLED:
+        from app.services.news_collector_service import collector_loop
+        collector_task = asyncio.create_task(collector_loop())
+
     yield
+
+    if collector_task:
+        collector_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await collector_task
 
 
 app = FastAPI(

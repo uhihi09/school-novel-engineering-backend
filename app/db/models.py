@@ -70,6 +70,26 @@ class RegionBoundary(Base):
     MinLng = Column(Float, nullable=True)
     MaxLng = Column(Float, nullable=True)
 
+class NewsPin(Base):
+    """Inequality news collected continuously by the background collector (F-2).
+
+    Rows accumulate over time (no deletion) — a time-series asset. DedupeKey blocks
+    re-inserting the same headline across collection cycles.
+    """
+    __tablename__ = "news_pins"
+
+    PinId = Column(String(36), primary_key=True, index=True)
+    RegionName = Column(String(50), nullable=False, index=True)   # 시도 (or "viewport" for live-path saves)
+    Headline = Column(String(500), nullable=False)
+    Category = Column(String(50), default="income")
+    SentimentScore = Column(Float, default=-0.5)
+    Severity = Column(String(20), default="Medium")
+    Summary = Column(String, nullable=True)
+    Latitude = Column(Float, nullable=False, index=True)
+    Longitude = Column(Float, nullable=False, index=True)
+    DedupeKey = Column(String(64), unique=True, index=True)       # sha256(normalized headline)
+    CollectedAt = Column(DateTime, default=_utcnow, index=True)
+
 class PolicyDoc(Base):
     """Policy/legislation corpus for real vector-search RAG (F-5/F-7)."""
     __tablename__ = "policy_docs"

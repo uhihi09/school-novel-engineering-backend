@@ -22,7 +22,9 @@
 
 | 빠름 (~즉시) | 느림 (실 AI, 10~30초) |
 |---|---|
-| auth/*, maps/grid, crowdsourcing/reports·{id}, media, sonify(~5초) | **maps/news, maps/spi, simulator/run, simulator/audit, advisor/chat** |
+| auth/*, maps/grid, **maps/news(수집분 있을 때)**, crowdsourcing/reports·{id}, media, sonify(~5초) | **maps/news(수집 전 첫 조회), maps/spi, simulator/run, simulator/audit, advisor/chat** |
+
+> `maps/news`는 백그라운드 수집기가 15분마다 전국 17개 시도 뉴스를 DB에 쌓기 때문에 평소엔 즉시 응답합니다. 해당 영역에 수집분이 없을 때만 라이브 검색(느림)으로 폴백합니다.
 
 ---
 
@@ -126,20 +128,23 @@ Authorization: Bearer <access_token>
 - Google Maps `data.addGeoJson()` / Mapbox `fill-extrusion`에 그대로. 응답 ~100~150KB(광역 뷰 기준).
 - 확대해도 화면에 걸친 시군구가 반환됩니다(빈 화면 없음). **지도 채색은 이 엔드포인트 사용을 권장**하고, `/grid`는 격자형 데모용으로 유지.
 
-### `GET /api/v1/maps/news` (F-2) — 실시간 불평등 뉴스 핀 ⏱️느림
+### `GET /api/v1/maps/news` (F-2) — 불평등 뉴스 핀 (수집분 즉시 / 미수집 영역만 ⏱️느림)
 ```jsonc
 // 쿼리: ne_lat, ne_lng, sw_lat, sw_lng (필수)
 // 응답
 {
   "bounding_box": { "ne_lat": 37.6, "ne_lng": 127.05, "sw_lat": 37.5, "sw_lng": 126.95 },
-  "source": "live-search",   // 실 검색 뉴스. 그라운딩 실패 시 "static"(폴백 4건)
+  "source": "stored-live-search",   // 백그라운드 수집분(즉시, 최근 48시간·최대 12건)
+                                    // "live-search" = 미수집 영역 실시간 검색(결과 저장 → 다음부턴 즉시)
+                                    // "static" = 그라운딩 실패 시 폴백 4건
   "pins": [
-    { "pin_id": "pin_news_100", "headline": "서울 아파트 공시가격 초양극화...",
+    { "pin_id": "pin_news_a1b2c3d4e5f6", "headline": "서울 아파트 공시가격 초양극화...",
       "category": "income", "sentiment_score": -0.6, "summary": "...",
       "severity": "High", "latitude": 37.55, "longitude": 126.99 }
   ]
 }
 ```
+> **백그라운드 수집기**: 서버가 15분마다(`NEWS_COLLECT_INTERVAL_MINUTES`) 전국 17개 시도의 실제 불평등 뉴스를 Gemini + Google 검색 그라운딩으로 수집해 `news_pins` 테이블에 중복 없이 누적합니다. VM에서 `NEWS_COLLECTOR_ENABLED=true`로 활성화(기본 꺼짐). 핀 스키마는 종전과 동일하므로 프론트 변경 불필요.
 
 ### `GET /api/v1/maps/spi` (F-4) — 위성 빈곤지수 리포트 ⏱️느림
 ```jsonc
@@ -312,7 +317,7 @@ const report = await fetch(`${BASE}/api/v1/crowdsourcing/report`, { method: "POS
 | GET | `/api/v1/auth/me` | 필수 | 빠름 |
 | GET | `/api/v1/maps/regions` ⭐ | 선택 | 빠름 |
 | GET | `/api/v1/maps/grid` | 선택 | 빠름 |
-| GET | `/api/v1/maps/news` | 선택 | ⏱️느림 |
+| GET | `/api/v1/maps/news` | 선택 | 빠름(수집분) / ⏱️느림(미수집 영역) |
 | GET | `/api/v1/maps/spi` | 선택 | ⏱️느림 |
 | POST | `/api/v1/simulator/run` | 선택 | ⏱️느림 |
 | POST | `/api/v1/simulator/sonify` | 선택 | 보통 |

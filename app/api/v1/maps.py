@@ -1,8 +1,15 @@
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from app.api.deps import get_db
+from app.db.models import NewsPin
 from app.services.maps_service import maps_service
 from app.services.gemini_service import gemini_service
+from app.services.news_collector_service import store_pins
+
+# Stored news pins older than this are considered stale for the map view.
+NEWS_STORED_WINDOW_HOURS = 48
+NEWS_STORED_LIMIT = 12
 
 router = APIRouter()
 
@@ -53,17 +60,44 @@ def read_news_pins(
     ne_lat: float = Query(..., description="North-East Latitude"),
     ne_lng: float = Query(..., description="North-East Longitude"),
     sw_lat: float = Query(..., description="South-West Latitude"),
-    sw_lng: float = Query(..., description="South-West Longitude")
+    sw_lng: float = Query(..., description="South-West Longitude"),
+    db: Session = Depends(get_db),
 ):
-    """F-2: Real-time inequality news sensor — real local news via Gemini + Google Search grounding,
-    with a static fallback if grounding is unavailable."""
+    """F-2: Inequality news pins. Serves pins accumulated by the background collector (instant);
+    falls back to a live Gemini + Google Search lookup (stored for next time), then to static scenarios."""
     bounding_box = {"ne_lat": ne_lat, "ne_lng": ne_lng, "sw_lat": sw_lat, "sw_lng": sw_lng}
+    lo_lat, hi_lat = min(sw_lat, ne_lat), max(sw_lat, ne_lat)
+    lo_lng, hi_lng = min(sw_lng, ne_lng), max(sw_lng, ne_lng)
 
-    # 1) Try REAL news grounded in live web search.
+    # 1) Stored pins from the continuous collector: instant response, no grounding call.
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=NEWS_STORED_WINDOW_HOURS)
+    stored = (
+        db.query(NewsPin)
+        .filter(
+            NewsPin.Latitude >= lo_lat, NewsPin.Latitude <= hi_lat,
+            NewsPin.Longitude >= lo_lng, NewsPin.Longitude <= hi_lng,
+            NewsPin.CollectedAt >= cutoff,
+        )
+        .order_by(NewsPin.CollectedAt.desc())
+        .limit(NEWS_STORED_LIMIT)
+        .all()
+    )
+    if stored:
+        pins = [{
+            "pin_id": row.PinId,
+            "headline": row.Headline,
+            "category": row.Category,
+            "sentiment_score": row.SentimentScore,
+            "summary": row.Summary or "",
+            "severity": row.Severity,
+            "latitude": row.Latitude,
+            "longitude": row.Longitude,
+        } for row in stored]
+        return {"bounding_box": bounding_box, "pins": pins, "source": "stored-live-search"}
+
+    # 2) Nothing stored for this viewport yet: live grounded search, persisted for next time.
     real = gemini_service.fetch_local_news(ne_lat, ne_lng, sw_lat, sw_lng, limit=4)
     if real:
-        lo_lat, hi_lat = min(sw_lat, ne_lat), max(sw_lat, ne_lat)
-        lo_lng, hi_lng = min(sw_lng, ne_lng), max(sw_lng, ne_lng)
         mid_lat, mid_lng = (lo_lat + hi_lat) / 2, (lo_lng + hi_lng) / 2
         pins = []
         for idx, n in enumerate(real):
@@ -86,9 +120,13 @@ def read_news_pins(
                 "latitude": round(lat, 6),
                 "longitude": round(lng, 6),
             })
+        try:
+            store_pins(db, "viewport", real, sw_lat=sw_lat, sw_lng=sw_lng, ne_lat=ne_lat, ne_lng=ne_lng)
+        except Exception:  # noqa: BLE001 — persistence is best-effort; never break the response
+            db.rollback()
         return {"bounding_box": bounding_box, "pins": pins, "source": "live-search"}
 
-    # 2) Fallback: static scenarios still analyzed by Gemini sentiment.
+    # 3) Fallback: static scenarios still analyzed by Gemini sentiment.
     pins = []
 
     # Generate 4 distinct fallback local news pins within the bounding box
