@@ -1,140 +1,295 @@
-# EquiScope 백엔드 — API 레퍼런스
+# EquiScope 백엔드 — 프론트엔드 연동 API 문서
 
-불평등 시각화 플랫폼 EquiScope의 FastAPI 백엔드입니다. 기본 URL: `http://localhost:8000`, 모든 엔드포인트는 `/api/v1` 하위. 인터랙티브 문서(Swagger)는 `/docs`, ReDoc은 `/redoc`.
+> 웹(Next.js) · 앱(React Native)에서 바로 붙일 수 있도록 정리한 REST API 레퍼런스입니다.
 
-**실행:** `./run.sh` (또는 `python -m uvicorn app.main:app --reload`). `.env`가 비어 있어도 **로컬 SQLite + Gemini 목(mock) 폴백**으로 그대로 동작합니다(클라우드 자격증명 불필요). `.env.example`을 `.env`로 복사해 값을 채우면 실제 Gemini/Vertex/Cloud SQL로 전환됩니다.
+## 기본 정보
 
-**인증 모델:** JWT Bearer 토큰. `maps` · `simulator` · `crowdsourcing` 엔드포인트는 **토큰 없이도 사용 가능**(없으면 공용 데모 유저로 처리), `Authorization: Bearer <token>`을 붙이면 실제 계정으로 동작합니다. `/auth/me`만 토큰 필수.
+| 항목 | 값 |
+|---|---|
+| **Base URL** | `http://34.67.12.246:8080` |
+| 공통 prefix | `/api/v1` (단, `/`, `/docs`, `/media/*` 제외) |
+| 응답 포맷 | JSON (제보 등록만 `multipart/form-data` 요청) |
+| 인터랙티브 문서 | `GET /docs` (Swagger) · `GET /redoc` |
+| OpenAPI 스키마 | `GET /api/v1/openapi.json` |
+
+**CORS**: 모든 origin 허용, **credentials(쿠키) 미사용**. 인증은 쿠키가 아니라 **`Authorization: Bearer <token>` 헤더**로 보냅니다.
+
+**인증 정책**: `maps` · `simulator` · `crowdsourcing`은 **토큰 없이도 호출 가능**(없으면 공용 데모 유저로 기록). 토큰을 붙이면 본인 계정으로 동작. `GET /auth/me`만 토큰 필수.
+
+### ⏱️ 응답 속도 (로딩 UI 필수 구분)
+
+실 Gemini/검색을 쓰는 엔드포인트는 느립니다. **반드시 로딩 스피너**를 두세요.
+
+| 빠름 (~즉시) | 느림 (실 AI, 10~30초) |
+|---|---|
+| auth/*, maps/grid, crowdsourcing/reports·{id}, media, sonify(~5초) | **maps/news, maps/spi, simulator/run, simulator/audit, advisor/chat** |
 
 ---
 
-## 인증 · 사용자 (Auth & Users)
+## 1. 인증 (Auth)
 
 ### `POST /api/v1/auth/register` → 201
-회원가입 후 토큰 발급.
-- 요청: `{ "email": str, "password": str(6자 이상), "nickname": str? }`
-- 응답: `{ access_token, token_type: "bearer", user: { user_id, email, nickname } }`
-- 이미 가입된 이메일이면 400.
+```jsonc
+// 요청 body (application/json)
+{ "email": "user@example.com", "password": "secret123", "nickname": "홍길동" }  // password 6자 이상
+// 응답
+{ "access_token": "eyJhbGci...", "token_type": "bearer",
+  "user": { "user_id": "user_da21f19c0984", "email": "user@example.com", "nickname": "홍길동" } }
+```
+- 이메일 중복 시 `400 {"detail": "..."}`
 
 ### `POST /api/v1/auth/login` → 200
-- 요청: `{ "email": str, "password": str }` → 위와 동일한 토큰 응답
-- 이메일/비밀번호 불일치 시 401.
+```jsonc
+// 요청
+{ "email": "user@example.com", "password": "secret123" }
+// 응답: register와 동일 (access_token + user)
+```
+- 실패 시 `401 {"detail": "Incorrect email or password."}`
 
-### `GET /api/v1/auth/me` → 200  *(토큰 필수)*
-- 헤더: `Authorization: Bearer <token>`
-- 응답: `{ user_id, email, nickname }`. 토큰 없거나 무효면 401/403.
+### `GET /api/v1/auth/me` → 200 *(토큰 필수)*
+```
+Authorization: Bearer <access_token>
+```
+```json
+{ "user_id": "user_da21f19c0984", "email": "user@example.com", "nickname": "홍길동" }
+```
+- 토큰 없음/무효 → **`401`** (403 아님)
 
----
-
-## 지도 · 뉴스 그리드 (Maps)
-
-### `GET /api/v1/maps/grid`  *(F-1 다차원 공간 시각화)*
-- 쿼리: `ne_lat, ne_lng, sw_lat, sw_lng, zoom=14, dimension=income|healthcare|climate|education`
-- 응답: GeoJSON `FeatureCollection` (5×5 격자). 각 셀에 `index_value`, `grade`, 차원별 속성(예: `average_income`, `doctor_count_per_10k`, `pm25_micrograms`, `school_count_per_10k`). 해당 격자 내 검증된 시민 제보가 있으면 점수를 하향 보정.
-
-### `GET /api/v1/maps/news`  *(F-2 실시간 이슈 탐지기)*
-- 쿼리: `ne_lat, ne_lng, sw_lat, sw_lng`
-- 응답: `{ bounding_box, pins: [{ pin_id, headline, category, sentiment_score, summary, severity, latitude, longitude }] }`. 헤드라인을 Gemini가 분석(목 폴백).
-
-### `GET /api/v1/maps/spi`  *(F-4 위성 빈곤지수 SPI)*
-- 쿼리: `lat, lng, region_name="대상 지역"`
-- 응답: `{ region_name, latitude, longitude, poverty_grade, green_access_score, slum_trend, road_paving_ratio, night_light_intensity, reasoning }`. 목 모드에선 좌표별 결정적 값, 실 모드에선 Gemini Vision이 위성 타일을 판독.
+> **토큰 사용법**: 로그인 후 `access_token`을 저장(웹: localStorage, 앱: SecureStore) → 이후 모든 요청 헤더에 `Authorization: Bearer <token>` 부착. 만료 7일.
 
 ---
 
-## 정책 시뮬레이터 · RAG (Simulator)
+## 2. 지도 (Maps)
 
-### `POST /api/v1/simulator/run`  *(F-3 페르소나 시뮬레이터)*
-- 요청: `{ title, description, policies: [{ category: "subsidy|minimum_wage|tax", param_value: float }] }`
-- 응답: `{ simulation_id, gini_before, gini_after, disparity_delta_percent, winners[], losers[], agent_samples[] }`. 1,000명 페르소나로 시뮬레이션하며, 샘플 8명은 Gemini가 생성한 일기(diary) 스니펫 포함.
-- `agent_samples[]` 각 항목: `{ persona_id, name, age, disposable_income_delta_monthly, utility_change, ai_diary_snippet }`.
+### `GET /api/v1/maps/grid` (F-1) — 불평등 3D 격자
+지도 화면 영역을 5×5 격자로 나눠 **실제 지역 통계**를 GeoJSON으로 반환. **전국 250개 시군구** 실데이터.
 
-### `POST /api/v1/simulator/sonify`  *(F-6 데이터 소니피케이션)*
-- 요청: `{ "diary_text": str }`
-- 응답: `{ sonified_audio_url: "data:audio/wav;base64,…", text }`. 일기 텍스트를 base64 오디오 스트림으로 변환.
+**쿼리 파라미터**
+| 이름 | 타입 | 필수 | 설명 |
+|---|---|---|---|
+| `ne_lat`,`ne_lng`,`sw_lat`,`sw_lng` | float | ✅ | 화면 바운딩 박스 |
+| `zoom` | int | | 기본 14 (격자는 항상 5×5) |
+| `dimension` | string | | `income`(기본)·`healthcare`·`climate`·`education` |
 
-### `GET /api/v1/simulator/audit`  *(F-7 법안 사각지대 감사)*
-- 쿼리: `policy_title`
-- 응답: `{ loopholes[], vulnerable_groups_affected[], recommended_amendments[], references_consulted[] }`. 로컬 법안 KB에서 관련 문서를 RAG로 조회.
+```jsonc
+// 응답 (Google Maps/Mapbox에 그대로 렌더)
+{
+  "type": "FeatureCollection",
+  "dimension": "income",
+  "data_source": "real-region-stats",   // 또는 "synthetic-fallback"(미시딩 지역)
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": { "type": "Polygon", "coordinates": [[[126.98,37.57],[...],[126.98,37.57]]] },
+      "properties": {
+        "grid_id": "grid_0_0",
+        "region": "서울특별시 종로구",   // 해당 격자의 실제 행정구역
+        "index_value": 62.4,             // 0~100, 높을수록 양호
+        "grade": "B (양호)",             // A(우수)/B(양호)/C(취약)/D(심각), 제보 있으면 "· 제보 N건 반영"
+        "average_income": 5200000         // ↓ dimension별 추가 필드
+      }
+    }
+  ]
+}
+```
+**dimension별 추가 property**: `income`→`average_income`(원) · `healthcare`→`doctor_count_per_10k` · `climate`→`pm25_micrograms` · `education`→`education_index`
+
+> 렌더 팁: `index_value`로 색상/높이(extrusion)를 매핑. `data_source==="synthetic-fallback"`이면 그 지역은 아직 실데이터 미시딩(현재 전국 시군구 시딩 완료).
+
+### `GET /api/v1/maps/news` (F-2) — 실시간 불평등 뉴스 핀 ⏱️느림
+```jsonc
+// 쿼리: ne_lat, ne_lng, sw_lat, sw_lng (필수)
+// 응답
+{
+  "bounding_box": { "ne_lat": 37.6, "ne_lng": 127.05, "sw_lat": 37.5, "sw_lng": 126.95 },
+  "source": "live-search",   // 실 검색 뉴스. 그라운딩 실패 시 "static"(폴백 4건)
+  "pins": [
+    { "pin_id": "pin_news_100", "headline": "서울 아파트 공시가격 초양극화...",
+      "category": "income", "sentiment_score": -0.6, "summary": "...",
+      "severity": "High", "latitude": 37.55, "longitude": 126.99 }
+  ]
+}
+```
+
+### `GET /api/v1/maps/spi` (F-4) — 위성 빈곤지수 리포트 ⏱️느림
+```jsonc
+// 쿼리: lat, lng (필수), region_name (기본 "대상 지역")
+// ⚠️ region_name에 한글 쓰면 URL 인코딩 필수 (encodeURIComponent)
+// 응답
+{ "region_name": "서울 종로구", "latitude": 37.5665, "longitude": 126.978,
+  "poverty_grade": "C (취약)", "green_access_score": 82.0, "slum_trend": "정체",
+  "road_paving_ratio": 0.98, "night_light_intensity": 41.0, "reasoning": "..." }
+```
 
 ---
 
-## AI 정책 어드바이저 (Advisor)
+## 3. 정책 시뮬레이터 (Simulator)
 
-### `POST /api/v1/advisor/chat`  *(F-5 AI 불평등 어드바이저)*
-- 요청: `{ "question": str }`
-- 응답: `{ question, answer, references: [{ title, snippet }], references_consulted: [str] }`. 로컬 법안 KB로 RAG를 수행해 근거를 인용한 Gemini 답변 생성.
+### `POST /api/v1/simulator/run` (F-3) — 정책 시뮬레이션 ⏱️느림(~15초)
+```jsonc
+// 요청 body
+{ "title": "청년 교통비 보조금 확대", "description": "월 5만원 지원",
+  "policies": [ { "category": "subsidy", "param_value": 50000 } ] }
+// category: "subsidy"(저소득 보조금) | "minimum_wage"(최저소득 하한) | "tax"(고소득 세율 %)
+// 응답
+{
+  "simulation_id": "sim_965b6853b405",
+  "gini_before": 0.514, "gini_after": 0.502, "disparity_delta_percent": -2.31,
+  "winners": ["저소득층"], "losers": ["고소득층"],   // 실제 소득변화 기반
+  "agent_samples": [
+    { "persona_id": "persona_001", "name": "시민 1", "age": 21,
+      "disposable_income_delta_monthly": 50000, "utility_change": 0.12,
+      "ai_diary_snippet": "이번 보조금으로 교통비 부담이 줄었다..." }
+  ]  // 대표 8명 (실 Gemini 생성 일기)
+}
+```
+
+### `POST /api/v1/simulator/sonify` (F-6) — 일기 음성 합성
+```jsonc
+// 요청 body
+{ "diary_text": "매달 월세 부담이 줄어 숨통이 트였습니다." }
+// 응답 (실 TTS WAV, <audio src>에 바로 사용)
+{ "sonified_audio_url": "data:audio/wav;base64,UklGRi...", "text": "매달..." }
+```
+
+### `GET /api/v1/simulator/audit` (F-7) — 법안 사각지대 감사 ⏱️느림
+```jsonc
+// 쿼리: policy_title (필수, 한글이면 encodeURIComponent)
+// 응답
+{ "loopholes": ["...", "..."],
+  "vulnerable_groups_affected": ["...", "..."],
+  "recommended_amendments": ["...", "..."],
+  "references_consulted": ["교통약자 이동편의 증진법", "장애인 활동지원 서비스"] }  // 벡터검색된 근거 정책
+```
 
 ---
 
-## 크라우드소싱 제보 (Crowdsourcing)
+## 4. AI 정책 어드바이저 (Advisor)
 
-### `POST /api/v1/crowdsourcing/report` → 201  *(F-2 / F-6)*
-- `multipart/form-data`: `category, raw_title, description, latitude, longitude, media?(파일)`
-- 제목/설명의 개인정보(PII)를 Gemini로 비식별화하고, 이미지가 있으면 Gemini Vision으로 검증 후 저장. 응답은 아래 **제보 형태**.
-
-### `GET /api/v1/crowdsourcing/reports`
-- 쿼리: `ne_lat, ne_lng, sw_lat, sw_lng, category?, valid_only=false`
-- 응답: `{ count, reports: [제보] }`. 경계 상자 내 제보 목록 — 지도 핀·모바일 피드용.
-
-### `GET /api/v1/crowdsourcing/reports/{report_id}`
-- 단건 제보 반환, 없으면 404.
-
-**제보 형태:** `{ report_id, user_id, category, raw_title, sanitized_description, latitude, longitude, is_valid, ai_trust_score, media_url, created_at }`
+### `POST /api/v1/advisor/chat` (F-5) — 불평등/정책 상담 ⏱️느림
+```jsonc
+// 요청 body
+{ "question": "저소득 고령층 의료 접근성 정책의 사각지대는?" }
+// 응답
+{ "question": "저소득 고령층...",
+  "answer": "제시된 참고 자료에 따르면...",   // 출처 인용 전문가 답변
+  "references": [ { "title": "노인장기요양보험", "snippet": "..." } ],
+  "references_consulted": ["노인장기요양보험", "기초연금"] }
+```
+> 메신저 UI: `question` 보내고 `answer` 표시, `references_consulted`를 출처 칩으로.
 
 ---
 
-## 설정 (`.env`)
+## 5. 크라우드소싱 제보 (Crowdsourcing)
 
-| 변수 | 기본값 | 용도 |
+### `POST /api/v1/crowdsourcing/report` → 201 — 제보 등록 (멀티모달)
+**`multipart/form-data`** (JSON 아님):
+| 필드 | 타입 | 필수 |
 |---|---|---|
-| `GEMINI_API_KEY` | *(비어 있음)* | Google AI Studio 키. 비우면 목 폴백으로 동작 |
-| `USE_VERTEX_AI` | `false` | Gemini를 Vertex AI로 라우팅 (`GOOGLE_APPLICATION_CREDENTIALS` + `GCP_PROJECT_ID` 필요) |
-| `GCP_PROJECT_ID` / `GCP_LOCATION` | *(비어 있음)* / `asia-northeast3` | Vertex 프로젝트/리전 |
-| `GEMINI_FLASH_MODEL` / `GEMINI_PRO_MODEL` | `gemini-3.5-flash` / `gemini-3.1-pro` | 사용할 Gemini 모델 id |
-| `GCS_BUCKET` | `equiscope-reports` | 제보 미디어 저장 버킷 |
-| `DATABASE_URL` | 로컬 SQLite | SQLAlchemy URL. Cloud SQL/Cloud SQL 등으로 교체 |
-| `SECRET_KEY` | 개발용 자리표시자 | **운영 환경에선 반드시 변경** (`openssl rand -hex 32`) |
-| `ACCESS_TOKEN_EXPIRE_MINUTES` | `10080` (7일) | JWT 만료 시간(분) |
+| `category` | text | ✅ (transport/housing/labor/healthcare 등) |
+| `raw_title` | text | ✅ |
+| `description` | text | ✅ |
+| `latitude`,`longitude` | text(float) | ✅ |
+| `media` | file(이미지) | 선택 |
 
-> **모델 id 주의:** `GEMINI_FLASH_MODEL` / `GEMINI_PRO_MODEL` 값이 실제 존재하는 모델이어야 실 Gemini 호출이 성공합니다. 없는 id면 호출이 실패하고 목 폴백으로 떨어집니다.
+```jsonc
+// 응답 (= 제보 객체)
+{ "report_id": "rep_5f104051", "user_id": "user_hackathon_equiscope_01",
+  "category": "transport", "raw_title": "경사로 파손",        // PII 비식별화됨
+  "sanitized_description": "휠체어 진입 불가...",              // PII 비식별화됨
+  "latitude": 37.5, "longitude": 127.0,
+  "is_valid": true, "ai_trust_score": 92.5,                   // 사진 있으면 Gemini Vision 판정
+  "media_url": "http://34.67.12.246:8080/media/rep_5f104051.png",  // 사진 없으면 null
+  "created_at": "2026-07-09T11:28:58.123456+00:00" }
+```
+> RN 앱: 카메라 촬영 → `FormData`에 `media` append → 전송. `media_url`을 즉시 지도 핀 썸네일로.
+
+### `GET /api/v1/crowdsourcing/reports` → 200 — 영역 내 제보 목록 (지도 핀/피드)
+```jsonc
+// 쿼리: ne_lat, ne_lng, sw_lat, sw_lng (필수), category(선택 필터), valid_only(기본 false)
+// 응답
+{ "count": 3, "reports": [ { /* 위 제보 객체와 동일 스키마 */ } ] }
+```
+
+### `GET /api/v1/crowdsourcing/reports/{report_id}` → 200 — 제보 단건
+- 없으면 `404 {"detail": "Report not found."}`
+
+### `GET /media/{filename}` — 업로드 이미지 서빙
+제보의 `media_url`을 `<img src>` / RN `<Image source>`에 그대로 사용.
 
 ---
 
-## 데이터베이스 — Cloud SQL for PostgreSQL
+## 6. 에러 규약
 
-기본은 로컬 SQLite(무설정 실행용)이고, 실제 DB는 **Cloud SQL PostgreSQL 18**을 사용합니다.
-- 인스턴스 연결 이름: `iceu-578:asia-northeast3:school-hackathon-db`
-- 공개 IP: `34.64.248.130` · 포트: `5432` · 리전: 서울(asia-northeast3)
-- 드라이버: `pg8000` (순수 파이썬, 빌드 불필요 — `requirements.txt`에 포함)
+| 코드 | 의미 | 프론트 처리 |
+|---|---|---|
+| `400` | 잘못된 요청(이메일 중복 등) | `detail` 메시지 표시 |
+| `401` | 인증 필요/토큰 만료 | 로그인 화면 유도 |
+| `404` | 리소스 없음 | not-found UI |
+| `422` | 검증 실패(파라미터 타입/누락) | 폼 검증 |
+| `5xx` | 서버 오류 | 재시도 안내 |
 
-**연결 방법 (둘 중 하나):**
-
-```bash
-# A) 공개 IP 직결 — 먼저 콘솔의 Connections > Networking > "승인된 네트워크"에 본인 IP 추가
-DATABASE_URL=postgresql+pg8000://postgres:비밀번호@34.64.248.130:5432/postgres
-
-# B) Cloud SQL Auth Proxy — 승인된 네트워크 불필요
-#   cloud-sql-proxy iceu-578:asia-northeast3:school-hackathon-db --port 5432
-DATABASE_URL=postgresql+pg8000://postgres:비밀번호@127.0.0.1:5432/postgres
-```
-
-**연결 확인 + 테이블 생성:**
-```bash
-python scripts/init_db.py
-# → "Connection OK" 및 테이블 3개(users, inequality_reports, simulation_logs) 생성 확인
-```
-
-- `session.py`는 `pool_pre_ping=True`로 Cloud SQL 유휴 커넥션 끊김을 자동 복구합니다.
-- DB가 잠깐 안 닿아도 서버 시작은 실패하지 않고 경고만 남깁니다(DB 의존 엔드포인트만 요청 시 오류).
+모든 에러 응답은 `{"detail": "..."}` 형태(422는 `detail` 배열).
 
 ---
 
-## 테스트
+## 7. 프론트 연동 스니펫
 
-```bash
-python -m pytest -q          # 19개 통과, ~0.2초
+```ts
+// fetch 래퍼 예시 (웹/RN 공통)
+const BASE = "http://34.67.12.246:8080";
+let token: string | null = null;
+
+async function api(path: string, init: RequestInit = {}) {
+  const res = await fetch(`${BASE}${path}`, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(init.headers || {}),
+    },
+  });
+  if (!res.ok) throw new Error((await res.json()).detail ?? res.statusText);
+  return res.json();
+}
+
+// 로그인
+const { access_token } = await api("/api/v1/auth/login",
+  { method: "POST", body: JSON.stringify({ email, password }) });
+token = access_token;
+
+// 지도 격자
+const grid = await api(`/api/v1/maps/grid?ne_lat=37.6&ne_lng=127.1&sw_lat=37.4&sw_lng=126.9&dimension=income`);
+
+// 제보 등록 (multipart — Content-Type 헤더 직접 지정 금지, 브라우저가 boundary 설정)
+const fd = new FormData();
+fd.append("category", "transport"); fd.append("raw_title", "..."); fd.append("description", "...");
+fd.append("latitude", "37.5"); fd.append("longitude", "127.0"); fd.append("media", file);
+const report = await fetch(`${BASE}/api/v1/crowdsourcing/report`, { method: "POST", body: fd })
+  .then(r => r.json());
 ```
-테스트는 **완전히 격리(hermetic)** 되어 있습니다 — `.env`에 실제 Gemini 키나 Cloud SQL URL이 있어도, 테스트는 인메모리 SQLite + Gemini 목으로 강제되어 외부 네트워크를 호출하지 않습니다(`tests/conftest.py`).
 
-> **참고:** `User` 테이블에 `HashedPassword` 컬럼이 추가되었습니다. 인증 도입 이전에 만들어진 로컬 `equiscope.db`가 있다면 삭제(`rm equiscope.db`) 후 재생성하세요(시작 시 자동 생성, 테스트 DB는 항상 새로 만들어짐).
+> **한글 쿼리 파라미터**(`region_name`, `policy_title`)는 반드시 `encodeURIComponent(...)`. fetch/axios가 body는 자동 인코딩하지만 URL 쿼리는 직접 처리 필요.
+
+---
+
+## 8. 전체 엔드포인트 요약
+
+| 메서드 | 경로 | 인증 | 속도 |
+|---|---|---|---|
+| POST | `/api/v1/auth/register` | — | 빠름 |
+| POST | `/api/v1/auth/login` | — | 빠름 |
+| GET | `/api/v1/auth/me` | 필수 | 빠름 |
+| GET | `/api/v1/maps/grid` | 선택 | 빠름 |
+| GET | `/api/v1/maps/news` | 선택 | ⏱️느림 |
+| GET | `/api/v1/maps/spi` | 선택 | ⏱️느림 |
+| POST | `/api/v1/simulator/run` | 선택 | ⏱️느림 |
+| POST | `/api/v1/simulator/sonify` | 선택 | 보통 |
+| GET | `/api/v1/simulator/audit` | 선택 | ⏱️느림 |
+| POST | `/api/v1/advisor/chat` | 선택 | ⏱️느림 |
+| POST | `/api/v1/crowdsourcing/report` | 선택 | 보통 |
+| GET | `/api/v1/crowdsourcing/reports` | 선택 | 빠름 |
+| GET | `/api/v1/crowdsourcing/reports/{id}` | 선택 | 빠름 |
+| GET | `/media/{filename}` | — | 빠름 |
+
+*데이터 출처·성격은 [DATA.md](DATA.md) 참고. 마지막 갱신: 2026-07-09.*
