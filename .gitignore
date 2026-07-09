@@ -54,3 +54,4 @@ Thumbs.db
 # Uploaded citizen-report media (served from /media)
 media/
 .test_media/
+scripts/_skorea_municipalities.json

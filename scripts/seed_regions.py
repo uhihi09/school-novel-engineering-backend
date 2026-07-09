@@ -1,49 +1,60 @@
-"""Seed real per-region inequality statistics (F-1) into the DB.
+"""Seed real per-region inequality statistics (F-1) for ALL of South Korea into the DB.
 
-Seoul's 25 자치구 with REAL centroid coordinates; the four socio-economic metrics are pulled from
-public web statistics via Gemini + Google Search grounding (computed once here, served fast at runtime).
+- Region list + REAL centroids: computed from a public administrative-boundary GeoJSON
+  (southkorea-maps, KOSTAT 2018) — 250 시군구.
+- The four socio-economic metrics + the 시도 name: pulled from public web statistics via
+  Gemini + Google Search grounding (batched), computed once here and served fast at runtime.
 
-Run on a host with a real GEMINI_API_KEY configured:
+Run on a host with a real GEMINI_API_KEY:
     python scripts/seed_regions.py
 """
+import json
 import sys
+import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.db.session import Base, SessionLocal, engine
-from app.db import models  # noqa: F401  (register models)
+from app.db import models  # noqa: F401
 from app.db.models import RegionStat
 from app.services.gemini_service import gemini_service
 
-# (region_id, 구 이름, 실제 중심 위도, 실제 중심 경도)
-DISTRICTS = [
-    ("seoul-jongno", "종로구", 37.5735, 126.9790),
-    ("seoul-jung", "중구", 37.5636, 126.9976),
-    ("seoul-yongsan", "용산구", 37.5326, 126.9906),
-    ("seoul-seongdong", "성동구", 37.5634, 127.0369),
-    ("seoul-gwangjin", "광진구", 37.5385, 127.0823),
-    ("seoul-dongdaemun", "동대문구", 37.5744, 127.0396),
-    ("seoul-jungnang", "중랑구", 37.6063, 127.0925),
-    ("seoul-seongbuk", "성북구", 37.5894, 127.0167),
-    ("seoul-gangbuk", "강북구", 37.6396, 127.0257),
-    ("seoul-dobong", "도봉구", 37.6688, 127.0471),
-    ("seoul-nowon", "노원구", 37.6542, 127.0568),
-    ("seoul-eunpyeong", "은평구", 37.6027, 126.9291),
-    ("seoul-seodaemun", "서대문구", 37.5791, 126.9368),
-    ("seoul-mapo", "마포구", 37.5663, 126.9019),
-    ("seoul-yangcheon", "양천구", 37.5170, 126.8666),
-    ("seoul-gangseo", "강서구", 37.5509, 126.8495),
-    ("seoul-guro", "구로구", 37.4954, 126.8874),
-    ("seoul-geumcheon", "금천구", 37.4569, 126.8955),
-    ("seoul-yeongdeungpo", "영등포구", 37.5264, 126.8963),
-    ("seoul-dongjak", "동작구", 37.5124, 126.9393),
-    ("seoul-gwanak", "관악구", 37.4784, 126.9516),
-    ("seoul-seocho", "서초구", 37.4836, 127.0327),
-    ("seoul-gangnam", "강남구", 37.5172, 127.0473),
-    ("seoul-songpa", "송파구", 37.5145, 127.1059),
-    ("seoul-gangdong", "강동구", 37.5301, 127.1238),
-]
+GEOJSON_URL = "https://raw.githubusercontent.com/southkorea/southkorea-maps/master/kostat/2018/json/skorea-municipalities-2018-geo.json"
+CACHE = Path(__file__).resolve().parent / "_skorea_municipalities.json"
+BATCH = 10
+
+
+def _centroid(geometry) -> tuple:
+    xs, ys = [], []
+
+    def walk(c):
+        if c and isinstance(c[0], (int, float)):
+            xs.append(c[0]); ys.append(c[1])
+        else:
+            for x in c:
+                walk(x)
+
+    walk(geometry["coordinates"])
+    return (sum(ys) / len(ys), sum(xs) / len(xs))  # (lat, lng)
+
+
+def _load_regions():
+    if CACHE.exists():
+        raw = CACHE.read_text()
+    else:
+        with urllib.request.urlopen(GEOJSON_URL, timeout=30) as r:
+            raw = r.read().decode("utf-8")
+        CACHE.write_text(raw)
+    data = json.loads(raw)
+    regions = []
+    for f in data["features"]:
+        p = f["properties"]
+        name = p.get("name")
+        code = str(p.get("code"))
+        lat, lng = _centroid(f["geometry"])
+        regions.append((f"kr-{code}", name, round(lat, 5), round(lng, 5)))
+    return regions
 
 
 def _f(v):
@@ -64,35 +75,42 @@ def main() -> int:
         print("No Gemini client (missing key). Cannot fetch real statistics. Aborting.")
         return 1
 
+    regions = _load_regions()
+    print(f"Loaded {len(regions)} 시군구 with real centroids from public GeoJSON.")
+
     db = SessionLocal()
     total = 0
-    for batch in _chunks(DISTRICTS, 6):
-        names = ", ".join(d[1] for d in batch)
+    for bi, batch in enumerate(_chunks(regions, BATCH)):
+        listing = "\n".join(
+            f"  {i}: {name} (위도 {lat}, 경도 {lng})" for i, (_rid, name, lat, lng) in enumerate(batch)
+        )
         prompt = f"""
-        서울특별시 자치구 {names} 각각의 실제 최신 공개 통계를 웹에서 조사해줘. 지표:
-        - avg_income_manwon: 월 평균 가구소득(만원)
-        - doctors_per_1k: 인구 1천명당 의사 수
-        - pm25: 연평균 초미세먼지 PM2.5 (㎍/㎥)
-        - education_index: 교육 자원·접근 종합지수 0~100 (학교/도서관/사교육 인프라 종합)
-        실제 공개 데이터·통계에 근거해 값을 채우고, 다른 말 없이 JSON만 반환:
-        {{"districts":[{{"name":"종로구","avg_income_manwon":0,"doctors_per_1k":0,"pm25":0,"education_index":0}}]}}
+        다음 대한민국 시군구 각각의 실제 최신 공개 통계를 웹에서 조사해줘. 좌표로 어느 시도인지 정확히 판별할 것.
+        지표: avg_income_manwon(월 평균 가구소득 만원), doctors_per_1k(인구 1천명당 의사 수),
+        pm25(연평균 초미세먼지 ㎍/㎥), education_index(교육 자원·접근 종합지수 0~100), sido(시도 이름).
+        지역:
+        {listing}
+        각 항목의 인덱스(i)를 그대로 echo해서, 다른 말 없이 JSON만 반환:
+        {{"regions":[{{"i":0,"sido":"서울특별시","avg_income_manwon":0,"doctors_per_1k":0,"pm25":0,"education_index":0}}]}}
         """
         data = gemini_service.research_json(prompt)
-        rows = (data or {}).get("districts") if isinstance(data, dict) else None
-        by_name = {r.get("name"): r for r in rows} if rows else {}
-        for rid, name, lat, lng in batch:
-            s = by_name.get(name, {})
+        rows = (data or {}).get("regions") if isinstance(data, dict) else None
+        by_i = {int(r["i"]): r for r in rows if "i" in r} if rows else {}
+        for i, (rid, name, lat, lng) in enumerate(batch):
+            s = by_i.get(i, {})
+            sido = s.get("sido") or ""
+            display = f"{sido} {name}".strip() if sido else name
             db.merge(RegionStat(
-                RegionId=rid, RegionName=name, CenterLat=lat, CenterLng=lng,
+                RegionId=rid, RegionName=display, CenterLat=lat, CenterLng=lng,
                 AvgIncomeManwon=_f(s.get("avg_income_manwon")),
                 DoctorsPer1k=_f(s.get("doctors_per_1k")),
                 Pm25=_f(s.get("pm25")),
                 EducationIndex=_f(s.get("education_index")),
-                Source="Gemini grounded search (public web statistics)",
+                Source="centroid: southkorea-maps GeoJSON (KOSTAT 2018) / stats: Gemini grounded search",
             ))
             total += 1
         db.commit()
-        print(f"  seeded: {names}  ({'OK' if by_name else 'no stats -> coords only'})")
+        print(f"  batch {bi + 1}: {len(batch)} regions  ({'stats OK' if by_i else 'coords only'})", flush=True)
     print(f"Total regions seeded: {total}")
     db.close()
     return 0
